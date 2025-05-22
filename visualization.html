@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>F1 Circuits World Map</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://d3js.org/topojson.v1.min.js"></script>
+    <style>
+        body { margin: 0; font-family: sans-serif; }
+        svg { width: 100%; height: 100vh; }
+        .country { fill: #ccc; stroke: #fff; stroke-width: 0.5; cursor: pointer; }
+        .f1-host { fill: orange; }
+        .info-box {
+            position: absolute;
+            top: 10px; left: 10px;
+            background: white;
+            border: 1px solid #ccc;
+            padding: 10px;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <div class="info-box" id="infoBox">Click on a country to see circuits</div>
+    <script type="module">
+        function padId(id) {
+            return id.toString().padStart(3, "0");
+        }
+
+
+        const svg = d3.select("body").append("svg");
+        const projection = d3.geoNaturalEarth1().scale(160).translate([window.innerWidth / 2, window.innerHeight / 2]);
+        const path = d3.geoPath(projection);
+        const g = svg.append("g");
+
+        const infoBox = d3.select("#infoBox");
+        const circuitData = new Map();
+
+        const countryNameFix = {
+            "USA": "United States",
+            "UK": "United Kingdom",
+            "Russia": "Russian Federation",
+            "Korea": "Korea, Republic of",
+            "UAE": "United Arab Emirates"
+        };
+
+        const circuits = await d3.csv("/data/circuits.csv", d => {
+            const normalizedCountry = countryNameFix[d.country] || d.country;
+            const entry = {
+                id: +d.circuitId,
+                name: d.name,
+                location: d.location,
+                country: normalizedCountry,
+                url: d.url,
+                lat: +d.lat,
+                lng: +d.lng,
+            };
+            if (!circuitData.has(normalizedCountry)) {
+                circuitData.set(normalizedCountry, []);
+            }
+            circuitData.get(normalizedCountry).push(entry);
+            return entry;
+        });
+
+        const world = await d3.json("110m.json");
+        const countries = topojson.feature(world, world.objects.countries).features;
+
+        const countryNameLookup = await d3.tsv("https://gist.githubusercontent.com/mbostock/4090846/raw/world-country-names.tsv");
+        const nameById = new Map(countryNameLookup.map(d => [d.id, d.name]));
+
+        const f1Countries = new Set(circuitData.keys());
+
+        g.selectAll("path")
+            .data(countries)
+            .join("path")
+            .attr("class", d => {
+                const countryName = nameById.get(Number(d.id).toString());
+                return f1Countries.has(countryName) ? "country f1-host" : "country";
+            })
+            .attr("d", path)
+            .on("click", (event, d) => {
+                const countryId = Number(d.id).toString();
+                const countryName = nameById.get(countryId);
+                
+                if (!countryName || !f1Countries.has(countryName)) return;
+
+                const [[x0, y0], [x1, y1]] = path.bounds(d);
+                svg.transition().duration(750).call(
+                    zoom.transform,
+                    d3.zoomIdentity
+                        .translate(window.innerWidth / 2, window.innerHeight / 2)
+                        .scale(Math.min(8, 0.9 / Math.max((x1 - x0) / window.innerWidth, (y1 - y0) / window.innerHeight)))
+                        .translate(-(x0 + x1) / 2, -(y0 + y1) / 2)
+                );
+
+                const circuits = circuitData.get(countryName);
+                console.log(circuits);
+                infoBox.html(`<strong>${countryName}</strong><ul>${
+                    circuits.map(c => `<li><a href="${c.url}" target="_blank">${c.name}</a> (${c.location})</li>`).join("")
+                }</ul>`);
+            });
+
+        const zoom = d3.zoom()
+            .scaleExtent([1, 8])
+            .on("zoom", event => {
+                g.attr("transform", event.transform);
+            });
+
+        svg.call(zoom);
+    </script>
+</body>
+</html>
