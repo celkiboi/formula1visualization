@@ -53,12 +53,15 @@
         .style("padding", "6px")
         .html(`Mode:
             <select id="modeSel">
-            <option value="circuits">Circuits</option>
-            <option value="drivers">Drivers (races driven)</option>
-            <option value="drivers-poles">Drivers (poles)</option>
-            <option value="drivers-podiums">Drivers (podiums)</option>
-            <option value="drivers-wins">Drivers (wins)</option>
-            <option value="drivers-champions">Drivers (championships)</option>
+                <option value="circuits">Circuits</option>
+                <option value="drivers">Drivers (races driven)</option>
+                <option value="drivers-poles">Drivers (poles)</option>
+                <option value="drivers-podiums">Drivers (podiums)</option>
+                <option value="drivers-wins">Drivers (wins)</option>
+                <option value="drivers-champions">Drivers (championships)</option>
+                <option value="constructors-poles">Constructors (poles)</option>
+                <option value="constructors-wins">Constructors (wins)</option>
+                <option value="constructors-champions">Constructors (championships)</option>
             </select>`);
 
         const svg  = d3.select("body").append("svg").attr("class", "world");
@@ -77,7 +80,9 @@
             worldTopo,
             countryNameLookup,
             qualifyingRows,
-            standingsRows
+            standingsRows,
+            constructorsRows,
+            constructorStandRows
         ] = await Promise.all([
             d3.csv("/data/circuits.csv"),
             d3.csv("/data/races.csv"),
@@ -86,7 +91,9 @@
             d3.json("110m.json"),
             d3.tsv("https://gist.githubusercontent.com/mbostock/4090846/raw/world-country-names.tsv"),
             d3.csv("/data/qualifying.csv"),
-            d3.csv("/data/driver_standings.csv")
+            d3.csv("/data/driver_standings.csv"),
+            d3.csv("/data/constructors.csv"),
+            d3.csv("/data/constructor_standings.csv")
         ]);
 
         const nameById = new Map(countryNameLookup.map(d => [d.id, d.name]));
@@ -246,6 +253,47 @@
             "drivers-champions":{grp: driversByCountryChampions, set: driverCountriesChampions, metric: "titles"}
         };
 
+                /* ---------- CONSTRUCTOR DATA ---------- */
+        const constructorRows = constructorsRows.map(c => ({
+            id: +c.constructorId,
+            name: c.name,
+            nationality: natFix[c.nationality] || c.nationality,
+            url: c.url,
+            wins: 0, poles: 0, titles: 0
+        }));
+
+        const cWins  = d3.rollup(resultsRows.filter(r => +r.position === 1),
+                                v => v.length, r => +r.constructorId);
+        const cPoles = d3.rollup(resultsRows.filter(r => +r.grid === 1),
+                                v => v.length, r => +r.constructorId);
+
+        const cChampRows = constructorStandRows.filter(s => {
+            const year = +racesRows.find(r => +r.raceId === +s.raceId).year;
+            return +s.position === 1 && +s.raceId === lastRaceIdByYear.get(year);
+        });
+        const cTitles = d3.rollup(cChampRows, v => v.length, s => +s.constructorId);
+
+        constructorRows.forEach(c=>{
+            c.wins = cWins.get(c.id) || 0;
+            c.poles = cPoles.get(c.id) || 0;
+            c.titles = cTitles.get(c.id) || 0;
+        });
+
+        const constructorsByCountryWins = d3.group(constructorRows.filter(c=>c.wins), c=>c.nationality);
+        const constructorsByCountryPoles = d3.group(constructorRows.filter(c=>c.poles), c=>c.nationality);
+        const constructorsByCountryChamp = d3.group(constructorRows.filter(c=>c.titles), c=>c.nationality);
+
+        const constructorCountriesWins = new Set(constructorsByCountryWins.keys());
+        const constructorCountriesPoles = new Set(constructorsByCountryPoles.keys());
+        const constructorCountriesChamp = new Set(constructorsByCountryChamp.keys());
+
+        const constructorMode = {
+            "constructors-poles": {grp: constructorsByCountryPoles, set: constructorCountriesPoles, metric:"poles"},
+            "constructors-wins": {grp: constructorsByCountryWins, set: constructorCountriesWins, metric:"wins"},
+            "constructors-champions": {grp: constructorsByCountryChamp, set: constructorCountriesChamp, metric:"titles"}
+        };
+
+
         const countries = topojson.feature(worldTopo, worldTopo.objects.countries).features;
 
         const zoom = d3.zoom()
@@ -267,26 +315,33 @@
             .attr("d", path)
             .attr("class", d => {
             const cname = nameById.get(Number(d.id).toString());
-            if (currentMode === "circuits")
-                return circuitCountries.has(cname) ? "country f1-host" : "country";
-            else
-                return driverMode[currentMode].set.has(cname) ? "country f1-host" : "country";
+                if (currentMode === "circuits") {
+                    return circuitCountries.has(cname) ? "country f1-host" : "country";
+                }
+                else if (currentMode.startsWith("drivers")) {
+                    return driverMode[currentMode].set.has(cname) ? "country f1-host" : "country";
+                }
+                else {
+                    return constructorMode[currentMode].set.has(cname) ? "country f1-host" : "country";
+                }
             })
             .on("click", (event,d) => {
-            const cname = nameById.get(Number(d.id).toString());
-            if (currentMode === "circuits") {
-                if (!circuitCountries.has(cname)) 
-                    return;
-                showCircuitPie(cname);
-            } else {
-                if (!driverCountries.has(cname)) 
-                    return;
-                const cfg = driverMode[currentMode];
-                if (!cfg.set.has(cname)) 
-                    return;
-                showDriverPie(cname, cfg);
-            }
-            zoomToCountry(d);
+                const cname = nameById.get(Number(d.id).toString());
+                if (currentMode === "circuits") {
+                    if (!circuitCountries.has(cname)) return;
+                    showCircuitPie(cname);
+                }
+                else if (currentMode.startsWith("drivers")) {
+                    const cfg = driverMode[currentMode];
+                    if (!cfg.set.has(cname)) return;
+                    showDriverPie(cname, cfg);
+                }
+                else {
+                    const ccfg = constructorMode[currentMode];
+                    if (!ccfg.set.has(cname)) return;
+                    showConstructorPie(cname, ccfg);
+                }
+                zoomToCountry(d);
             });
         }
         updateMapColors();
@@ -370,7 +425,18 @@
             if (!list) 
                 return;
             pieTemplate(
-                `${country} – ${cfg.metric} by driver`,
+                `${country} - ${cfg.metric} by driver`,
+                list,
+                d => d.name,
+                d => d[cfg.metric]
+            );
+        }
+
+        function showConstructorPie(country, cfg){
+            const list = cfg.grp.get(country);
+            if (!list) return;
+            pieTemplate(
+                `${country} - ${cfg.metric} by constructor`,
                 list,
                 d => d.name,
                 d => d[cfg.metric]
