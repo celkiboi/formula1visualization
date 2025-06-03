@@ -62,6 +62,14 @@
             return entry;
         });
 
+        const races = await d3.csv("/data/races.csv");
+
+        const raceCount = new Map();
+        races.forEach(r => {
+        const id = +r.circuitId;
+        raceCount.set(id, (raceCount.get(id) || 0) + 1);
+        });
+
         const world = await d3.json("110m.json");
         const countries = topojson.feature(world, world.objects.countries).features;
 
@@ -69,6 +77,12 @@
         const nameById = new Map(countryNameLookup.map(d => [d.id, d.name]));
 
         const f1Countries = new Set(circuitData.keys());
+
+        circuitData.forEach(arr => {
+            arr.forEach(c => {
+                c.races = raceCount.get(c.id) || 0;
+            });
+        });
 
         g.selectAll("path")
             .data(countries)
@@ -94,10 +108,53 @@
                 );
 
                 const circuits = circuitData.get(countryName);
-                console.log(circuits);
-                infoBox.html(`<strong>${countryName}</strong><ul>${
-                    circuits.map(c => `<li><a href="${c.url}" target="_blank">${c.name}</a> (${c.location})</li>`).join("")
-                }</ul>`);
+                infoBox.html("");
+
+                const boxW = 300, boxH = 300, R = (Math.min(boxW, boxH) / 2) - 10;
+                const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+                infoBox.append("h3").text(`${countryName} races by circuit`);
+
+                const pieSvg = infoBox.append("svg")
+                .attr("width", boxW)
+                .attr("height", boxH + circuits.length * 20 + 10);
+
+                const chart = pieSvg.append("g")
+                .attr("transform", `translate(${boxW / 2},${boxH / 2})`);
+
+                const pie = d3.pie()
+                .value(d => d.races)
+                .sort(null);
+
+                const arc = d3.arc().innerRadius(0).outerRadius(R);
+
+                chart.selectAll("path")
+                .data(pie(circuits))
+                .join("path")
+                .attr("d", arc)
+                .attr("fill", d => color(d.data.name))
+                .append("title")
+                .text(d => `${d.data.name}: ${d.data.races} race(s)`);
+
+                const legend = pieSvg.append("g")
+                .attr("transform", `translate(10, ${boxH + 10})`);
+
+                const item = legend.selectAll("g")
+                .data(circuits)
+                .join("g")
+                .attr("transform", (d, i) => `translate(0, ${i * 20})`);
+
+                item.append("rect")
+                .attr("width", 12)
+                .attr("height", 12)
+                .attr("fill", d => color(d.name));
+
+                item.append("text")
+                .attr("x", 18)
+                .attr("y", 10)
+                .text(d => `${d.name} (${d.races})`)
+                .style("font-size", "12px");
+
             });
 
         const zoom = d3.zoom()
