@@ -7,7 +7,7 @@
     <script src="https://d3js.org/topojson.v1.min.js"></script>
     <style>
         body { margin: 0; font-family: sans-serif; }
-        svg { width: 100%; height: 100vh; }
+        .world { width: 100%; height: 99vh; }
         .country { fill: #ccc; stroke: #fff; stroke-width: 0.5; cursor: pointer; }
         .f1-host { fill: orange; }
         .info-box {
@@ -18,152 +18,286 @@
             padding: 10px;
             max-width: 300px;
         }
+        .legend-scroll {
+            max-height:140px;
+            overflow-y:auto;
+            margin-top:8px;
+            border-top:1px solid #ddd;
+            padding-top:4px;
+        }
+        .pie-tip{
+            position:absolute;
+            pointer-events:none;
+            background:rgba(0,0,0,.8);
+            color:#fff;
+            padding:4px 6px;
+            border-radius:3px;
+            font-size:12px;
+            z-index:999;
+            opacity:0;
+            transition:opacity .15s;
+        }
     </style>
 </head>
 <body>
     <div class="info-box" id="infoBox">Click on a country to see circuits</div>
     <script type="module">
-        function padId(id) {
-            return id.toString().padStart(3, "0");
-        }
 
+        d3.select("body").append("div")
+        .attr("id", "modeBar")
+        .style("position", "absolute")
+        .style("top", "10px")
+        .style("right", "10px")
+        .style("background", "white")
+        .style("border", "1px solid #ccc")
+        .style("padding", "6px")
+        .html(`Mode:
+            <select id="modeSel">
+            <option value="circuits">Circuits</option>
+            <option value="drivers">Drivers (races driven)</option>
+            </select>`);
 
-        const svg = d3.select("body").append("svg");
-        const projection = d3.geoNaturalEarth1().scale(160).translate([window.innerWidth / 2, window.innerHeight / 2]);
-        const path = d3.geoPath(projection);
+        const svg  = d3.select("body").append("svg").attr("class", "world");
         const g = svg.append("g");
-
+        const proj = d3.geoNaturalEarth1()
+                    .scale(160)
+                    .translate([window.innerWidth / 2, window.innerHeight / 2]);
+        const path = d3.geoPath(proj);
         const infoBox = d3.select("#infoBox");
-        const circuitData = new Map();
 
-        const countryNameFix = {
-            "USA": "United States",
-            "UK": "United Kingdom",
-            "Russia": "Russian Federation",
-            "Korea": "Korea, Republic of",
-            "UAE": "United Arab Emirates"
-        };
+        const [
+            circuitsRows,
+            racesRows,
+            driversRows,
+            resultsRows,
+            worldTopo,
+            countryNameLookup
+        ] = await Promise.all([
+            d3.csv("/data/circuits.csv"),
+            d3.csv("/data/races.csv"),
+            d3.csv("/data/drivers.csv"),
+            d3.csv("/data/results.csv"),
+            d3.json("110m.json"),
+            d3.tsv("https://gist.githubusercontent.com/mbostock/4090846/raw/world-country-names.tsv")
+        ]);
 
-        const circuits = await d3.csv("/data/circuits.csv", d => {
-            const normalizedCountry = countryNameFix[d.country] || d.country;
-            const entry = {
-                id: +d.circuitId,
-                name: d.name,
-                location: d.location,
-                country: normalizedCountry,
-                url: d.url,
-                lat: +d.lat,
-                lng: +d.lng,
-            };
-            if (!circuitData.has(normalizedCountry)) {
-                circuitData.set(normalizedCountry, []);
-            }
-            circuitData.get(normalizedCountry).push(entry);
-            return entry;
-        });
-
-        const races = await d3.csv("/data/races.csv");
-
-        const raceCount = new Map();
-        races.forEach(r => {
-        const id = +r.circuitId;
-        raceCount.set(id, (raceCount.get(id) || 0) + 1);
-        });
-
-        const world = await d3.json("110m.json");
-        const countries = topojson.feature(world, world.objects.countries).features;
-
-        const countryNameLookup = await d3.tsv("https://gist.githubusercontent.com/mbostock/4090846/raw/world-country-names.tsv");
         const nameById = new Map(countryNameLookup.map(d => [d.id, d.name]));
 
-        const f1Countries = new Set(circuitData.keys());
+        const countryNameFix = {
+            USA: "United States",
+            UK : "United Kingdom",
+            Russia: "Russian Federation",
+            Korea: "Korea, Republic of",
+            UAE: "United Arab Emirates"
+        };
+        const circuitData = d3.group(
+        circuitsRows.map(r => ({
+            ...r,
+            id : +r.circuitId,
+            lat: +r.lat,
+            lng: +r.lng,
+            country: countryNameFix[r.country] || r.country,
+            races: 0
+        })),
+        d => d.country
+        );
 
-        circuitData.forEach(arr => {
-            arr.forEach(c => {
-                c.races = raceCount.get(c.id) || 0;
-            });
+        const raceCount = d3.rollup(
+        racesRows,
+        v => v.length,
+        r => +r.circuitId
+        );
+        circuitData.forEach(arr => arr.forEach(c => c.races = raceCount.get(c.id) || 0));
+        const circuitCountries = new Set(circuitData.keys());
+
+        const natFix = {
+            "British": "United Kingdom",
+            "German": "Germany",
+            "Spanish": "Spain",
+            "Finnish": "Finland",
+            "Japanese": "Japan",
+            "French": "France",
+            "Polish": "Poland",
+            "Italian": "Italy",
+            "Brazilian": "Brazil",
+            "Dutch": "Netherlands",
+            "Australian": "Australia",
+            "Canadian": "Canada",
+            "Austrian": "Austria",
+            "Belgian": "Belgium",
+            "American": "United States",
+            "Russian": "Russian Federation",
+            "Swiss": "Switzerland",
+            "Swedish": "Sweden",
+            "Danish": "Denmark",
+            "Portuguese": "Portugal",
+            "Irish": "Ireland",
+            "Hungarian": "Hungary",
+            "Czech": "Czech Republic",
+            "Monegasque": "Monaco",
+            "Thai": "Thailand",
+            "Chinese": "China",
+            "Indian": "India",
+            "South African": "South Africa",
+            "Argentine": "Argentina",
+            "Mexican": "Mexico",
+            "Venezuelan": "Venezuela",
+            "Colombian": "Colombia",
+            "New Zealander": "New Zealand",
+            "Malaysian": "Malaysia",
+            "Indonesian": "Indonesia",
+            "Singaporean": "Singapore",
+            "South Korean": "Korea, Republic of",
+            "Turkish": "Turkey",
+            "Chilean": "Chile",
+            "Romanian": "Romania",
+            "Bulgarian": "Bulgaria",
+            "Ukrainian": "Ukraine",
+            "Emirati": "United Arab Emirates",
+            "Saudi": "Saudi Arabia",
+            "Israeli": "Israel",
+            "Egyptian": "Egypt",
+            "Moroccan": "Morocco",
+            "Mexican-American": "United States"
+        };
+
+
+        const driverRows = driversRows.map(d => ({
+        id: +d.driverId,
+        name: `${d.forename} ${d.surname}`,
+        nationality: natFix[d.nationality] || d.nationality,
+        url: d.url,
+        races: 0
+        }));
+
+        const starts = d3.rollup(
+        resultsRows,
+        v => v.length,
+        r => +r.driverId
+        );
+        driverRows.forEach(dr => dr.races = starts.get(dr.id) || 0);
+
+        const driversByCountry = d3.group(driverRows, d => d.nationality);
+        const driverCountries  = new Set(driversByCountry.keys());
+
+        const countries = topojson.feature(worldTopo, worldTopo.objects.countries).features;
+
+        const zoom = d3.zoom()
+        .scaleExtent([1,8])
+        .on("zoom", e => g.attr("transform", e.transform));
+        svg.call(zoom);
+
+        let currentMode = "circuits";
+        d3.select("#modeSel").on("change", function() {
+        currentMode = this.value;
+        updateMapColors();
+        infoBox.text("Click on a highlighted country to see data");
         });
 
+        function updateMapColors() {
         g.selectAll("path")
             .data(countries)
             .join("path")
-            .attr("class", d => {
-                const countryName = nameById.get(Number(d.id).toString());
-                return f1Countries.has(countryName) ? "country f1-host" : "country";
-            })
             .attr("d", path)
-            .on("click", (event, d) => {
-                const countryId = Number(d.id).toString();
-                const countryName = nameById.get(countryId);
-                
-                if (!countryName || !f1Countries.has(countryName)) return;
+            .attr("class", d => {
+            const cname = nameById.get(Number(d.id).toString());
+            if (currentMode === "circuits")
+                return circuitCountries.has(cname) ? "country f1-host" : "country";
+            else
+                return driverCountries.has(cname) ? "country f1-host" : "country";
+            })
+            .on("click", (event,d) => {
+            const cname = nameById.get(Number(d.id).toString());
+            if (currentMode === "circuits") {
+                if (!circuitCountries.has(cname)) return;
+                showCircuitPie(cname);
+            } else {
+                if (!driverCountries.has(cname)) return;
+                showDriverPie(cname);
+            }
+            zoomToCountry(d);
+            });
+        }
+        updateMapColors();
 
-                const [[x0, y0], [x1, y1]] = path.bounds(d);
-                svg.transition().duration(750).call(
-                    zoom.transform,
-                    d3.zoomIdentity
-                        .translate(window.innerWidth / 2, window.innerHeight / 2)
-                        .scale(Math.min(8, 0.9 / Math.max((x1 - x0) / window.innerWidth, (y1 - y0) / window.innerHeight)))
-                        .translate(-(x0 + x1) / 2, -(y0 + y1) / 2)
-                );
+        function zoomToCountry(feature){
+        const [[x0,y0],[x1,y1]] = path.bounds(feature);
+        svg.transition().duration(750).call(
+            zoom.transform,
+            d3.zoomIdentity
+            .translate(window.innerWidth/2, window.innerHeight/2)
+            .scale(Math.min(8, 0.9 / Math.max((x1-x0)/window.innerWidth,(y1-y0)/window.innerHeight)))
+            .translate(-(x0+x1)/2, -(y0+y1)/2)
+        );
+        }
 
-                const circuits = circuitData.get(countryName);
-                infoBox.html("");
+        function pieTemplate(title, data, labelFn, valueFn){
+            infoBox.html("");
+            const boxW=300, boxH=300, R = (Math.min(boxW,boxH)/2)-10;
+            const color = d3.scaleOrdinal(d3.schemeTableau10);
+            infoBox.append("h3").text(title);
 
-                const boxW = 300, boxH = 300, R = (Math.min(boxW, boxH) / 2) - 10;
-                const color = d3.scaleOrdinal(d3.schemeCategory10);
-
-                infoBox.append("h3").text(`${countryName} races by circuit`);
-
-                const pieSvg = infoBox.append("svg")
+            const pieSvg = infoBox.append("svg")
                 .attr("width", boxW)
-                .attr("height", boxH + circuits.length * 20 + 10);
+                .attr("height", R * 2 + 20);
 
-                const chart = pieSvg.append("g")
-                .attr("transform", `translate(${boxW / 2},${boxH / 2})`);
+            const chart = pieSvg.append("g")
+                .attr("transform",`translate(${boxW/2},${boxH/2})`);
+            
+            const tip = infoBox.append("div")
+                .attr("class","pie-tip");
 
-                const pie = d3.pie()
-                .value(d => d.races)
-                .sort(null);
+            const pie = d3.pie().value(valueFn).sort(null);
+            const arc = d3.arc().innerRadius(0).outerRadius(R);
 
-                const arc = d3.arc().innerRadius(0).outerRadius(R);
-
-                chart.selectAll("path")
-                .data(pie(circuits))
+            chart.selectAll("path")
+                .data(pie(data))
                 .join("path")
                 .attr("d", arc)
-                .attr("fill", d => color(d.data.name))
-                .append("title")
-                .text(d => `${d.data.name}: ${d.data.races} race(s)`);
+                .attr("fill", d => color(labelFn(d.data)))
+                .on("mouseover", (e,d)=>{
+                    tip.style("opacity",1)
+                        .text(`${labelFn(d.data)}: ${valueFn(d.data)}`);
+                })
+                .on("mousemove", (e)=>{
+                    tip.style("left", (e.pageX + 12) + "px")
+                        .style("top",  (e.pageY + 12) + "px");
+                })
+                .on("mouseleave", ()=>{
+                    tip.style("opacity",0);
+                });
 
-                const legend = pieSvg.append("g")
-                .attr("transform", `translate(10, ${boxH + 10})`);
+            const legendDiv = infoBox.append("div")
+                .attr("class","legend-scroll");
 
-                const item = legend.selectAll("g")
-                .data(circuits)
-                .join("g")
-                .attr("transform", (d, i) => `translate(0, ${i * 20})`);
+            const items = legendDiv.selectAll("div")
+                .data(data)
+                .join("div")
+                .style("display","flex")
+                .style("align-items","center")
+                .style("margin-bottom","4px")
+                .style("font-size","12px");
 
-                item.append("rect")
-                .attr("width", 12)
-                .attr("height", 12)
-                .attr("fill", d => color(d.name));
+            items.append("span")
+                .style("width","12px")
+                .style("height","12px")
+                .style("margin-right","6px")
+                .style("flex-shrink","0")
+                .style("background", d => color(labelFn(d)));
 
-                item.append("text")
-                .attr("x", 18)
-                .attr("y", 10)
-                .text(d => `${d.name} (${d.races})`)
-                .style("font-size", "12px");
+            items.append("span")
+                .text(d => `${labelFn(d)} (${valueFn(d)})`);
+        }
 
-            });
+        function showCircuitPie(country){
+            const list = circuitData.get(country).filter(d=>d.races>0);
+            pieTemplate(`${country} - races by circuit`, list, d=>d.name, d=>d.races);
+        }
 
-        const zoom = d3.zoom()
-            .scaleExtent([1, 8])
-            .on("zoom", event => {
-                g.attr("transform", event.transform);
-            });
-
-        svg.call(zoom);
+        function showDriverPie(country){
+            const list = driversByCountry.get(country).filter(d=>d.races>0);
+            pieTemplate(`${country} - GP starts by driver`, list, d=>d.name, d=>d.races);
+        }
     </script>
 </body>
 </html>
