@@ -55,6 +55,10 @@
             <select id="modeSel">
             <option value="circuits">Circuits</option>
             <option value="drivers">Drivers (races driven)</option>
+            <option value="drivers-poles">Drivers (poles)</option>
+            <option value="drivers-podiums">Drivers (podiums)</option>
+            <option value="drivers-wins">Drivers (wins)</option>
+            <option value="drivers-champions">Drivers (championships)</option>
             </select>`);
 
         const svg  = d3.select("body").append("svg").attr("class", "world");
@@ -71,14 +75,18 @@
             driversRows,
             resultsRows,
             worldTopo,
-            countryNameLookup
+            countryNameLookup,
+            qualifyingRows,
+            standingsRows
         ] = await Promise.all([
             d3.csv("/data/circuits.csv"),
             d3.csv("/data/races.csv"),
             d3.csv("/data/drivers.csv"),
             d3.csv("/data/results.csv"),
             d3.json("110m.json"),
-            d3.tsv("https://gist.githubusercontent.com/mbostock/4090846/raw/world-country-names.tsv")
+            d3.tsv("https://gist.githubusercontent.com/mbostock/4090846/raw/world-country-names.tsv"),
+            d3.csv("/data/qualifying.csv"),
+            d3.csv("/data/driver_standings.csv")
         ]);
 
         const nameById = new Map(countryNameLookup.map(d => [d.id, d.name]));
@@ -107,6 +115,13 @@
         v => v.length,
         r => +r.circuitId
         );
+
+        const lastRaceIdByYear = d3.rollup(
+            racesRows,
+            v => d3.max(v, r => +r.raceId),
+            r => +r.year
+        );
+
         circuitData.forEach(arr => arr.forEach(c => c.races = raceCount.get(c.id) || 0));
         const circuitCountries = new Set(circuitData.keys());
 
@@ -163,22 +178,73 @@
 
 
         const driverRows = driversRows.map(d => ({
-        id: +d.driverId,
-        name: `${d.forename} ${d.surname}`,
-        nationality: natFix[d.nationality] || d.nationality,
-        url: d.url,
-        races: 0
+            id: +d.driverId,
+            name: `${d.forename} ${d.surname}`,
+            nationality: natFix[d.nationality] || d.nationality,
+            url: d.url,
+            races: 0
         }));
 
         const starts = d3.rollup(
-        resultsRows,
-        v => v.length,
-        r => +r.driverId
+            resultsRows,
+            v => v.length,
+            r => +r.driverId
         );
-        driverRows.forEach(dr => dr.races = starts.get(dr.id) || 0);
+
+        const poles = d3.rollup(
+            resultsRows.filter(r => +r.grid === 1),
+            v => v.length,
+            r => +r.driverId
+        );
+
+        const podiums = d3.rollup(
+            resultsRows.filter(r => [1,2,3].includes(+r.position)),
+            v => v.length,
+            r => +r.driverId);
+
+        const wins = d3.rollup(
+            resultsRows.filter(r => +r.position === 1),
+            v => v.length,
+            r => +r.driverId);
+
+        const champRows = standingsRows.filter(s => {
+            const year   = +racesRows.find(r => +r.raceId === +s.raceId).year;
+            return +s.position === 1 && +s.raceId === lastRaceIdByYear.get(year);
+        });
+
+        const titles = d3.rollup(
+            champRows,
+            v => v.length,
+            s => +s.driverId
+        );
+
+        driverRows.forEach((dr) => {
+            dr.races = starts.get(dr.id) || 0;
+            dr.poles = poles.get(dr.id) || 0;
+            dr.podiums = podiums.get(dr.id) || 0;
+            dr.wins = wins.get(dr.id) || 0;
+            dr.titles = titles.get(dr.id) || 0;
+        });
 
         const driversByCountry = d3.group(driverRows, d => d.nationality);
-        const driverCountries  = new Set(driversByCountry.keys());
+        const driversByCountryPoles = d3.group(driverRows.filter(d=>d.poles),   d=>d.nationality);
+        const driversByCountryPodiums = d3.group(driverRows.filter(d=>d.podiums), d=>d.nationality);
+        const driversByCountryWins = d3.group(driverRows.filter(d=>d.wins),    d=>d.nationality);
+        const driversByCountryChampions = d3.group(driverRows.filter(d=>d.titles),  d=>d.nationality);
+
+        const driverCountries = new Set(driversByCountry.keys());
+        const driverCountriesPoles = new Set(driversByCountryPoles.keys());
+        const driverCountriesPodiums = new Set(driversByCountryPodiums.keys());
+        const driverCountriesWins = new Set(driversByCountryWins.keys());
+        const driverCountriesChampions = new Set(driversByCountryChampions.keys());
+
+        const driverMode = {
+            "drivers": {grp: driversByCountry, set: driverCountries, metric: "races"},
+            "drivers-poles": {grp: driversByCountryPoles, set: driverCountriesPoles, metric: "poles"},
+            "drivers-podiums": {grp: driversByCountryPodiums, set: driverCountriesPodiums, metric: "podiums"},
+            "drivers-wins": {grp: driversByCountryWins, set: driverCountriesWins, metric: "wins"},
+            "drivers-champions":{grp: driversByCountryChampions, set: driverCountriesChampions, metric: "titles"}
+        };
 
         const countries = topojson.feature(worldTopo, worldTopo.objects.countries).features;
 
@@ -204,16 +270,21 @@
             if (currentMode === "circuits")
                 return circuitCountries.has(cname) ? "country f1-host" : "country";
             else
-                return driverCountries.has(cname) ? "country f1-host" : "country";
+                return driverMode[currentMode].set.has(cname) ? "country f1-host" : "country";
             })
             .on("click", (event,d) => {
             const cname = nameById.get(Number(d.id).toString());
             if (currentMode === "circuits") {
-                if (!circuitCountries.has(cname)) return;
+                if (!circuitCountries.has(cname)) 
+                    return;
                 showCircuitPie(cname);
             } else {
-                if (!driverCountries.has(cname)) return;
-                showDriverPie(cname);
+                if (!driverCountries.has(cname)) 
+                    return;
+                const cfg = driverMode[currentMode];
+                if (!cfg.set.has(cname)) 
+                    return;
+                showDriverPie(cname, cfg);
             }
             zoomToCountry(d);
             });
@@ -294,9 +365,16 @@
             pieTemplate(`${country} - races by circuit`, list, d=>d.name, d=>d.races);
         }
 
-        function showDriverPie(country){
-            const list = driversByCountry.get(country).filter(d=>d.races>0);
-            pieTemplate(`${country} - GP starts by driver`, list, d=>d.name, d=>d.races);
+        function showDriverPie(country, cfg){
+            const list = cfg.grp.get(country);
+            if (!list) 
+                return;
+            pieTemplate(
+                `${country} – ${cfg.metric} by driver`,
+                list,
+                d => d.name,
+                d => d[cfg.metric]
+            );
         }
     </script>
 </body>
